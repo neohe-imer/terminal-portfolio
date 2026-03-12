@@ -47,3 +47,7 @@ Inspired by minimal shell aesthetics.
 git clone https://github.com/neohe-imer/terminal-portfolio
 cd terminal-portfolio
 cargo run
+
+SSH Version (coming soon)
+
+The project is designed to run over SSH so visitors can open the portfolio directly in their terminal:
