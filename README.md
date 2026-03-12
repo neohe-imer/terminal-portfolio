@@ -11,10 +11,12 @@ Inspired by minimal shell aesthetics.
 ## Preview
 
 ## Preview
+<img width="1470" height="956" alt="Screenshot 2026-03-11 at 9 43 25 PM" src="https://github.com/user-attachments/assets/33ab6ccc-3b0d-4ffd-96ae-b2119d0f9f9e" />
 
-<img src="assets/about.png" width="900"/>
+<img width="1470" height="956" alt="Screenshot 2026-03-11 at 9 43 17 PM" src="https://github.com/user-attachments/assets/2d4b61b5-eeb9-4d82-a24d-0f5ea0a85b42" />
 
-<img src="assets/links.png" width="900"/>
+
+
 
 ---
 
