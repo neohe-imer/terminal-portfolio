@@ -8,7 +8,6 @@ Inspired by minimal shell aesthetics.
 
 ---
 
-## Preview
 
 ## Preview
 <img width="1470" height="956" alt="Screenshot 2026-03-11 at 9 43 25 PM" src="https://github.com/user-attachments/assets/33ab6ccc-3b0d-4ffd-96ae-b2119d0f9f9e" />
