@@ -10,13 +10,11 @@ Inspired by minimal shell aesthetics.
 
 ## Preview
 
-### About Screen
+## Preview
 
-![About](assets/about.png)
+<img src="assets/about.png" width="900"/>
 
-### Links Screen
-
-![Links](assets/links.png)
+<img src="assets/links.png" width="900"/>
 
 ---
 
