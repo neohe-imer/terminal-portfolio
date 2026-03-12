@@ -52,6 +52,8 @@ SSH Version (coming soon)
 
 The project is designed to run over SSH so visitors can open the portfolio directly in their terminal:
 
+
+```
 ## License
 
 MIT
