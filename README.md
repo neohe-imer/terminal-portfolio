@@ -21,40 +21,53 @@ Inspired by minimal shell aesthetics.
 
 ## Features
 
-- terminal-native UI
-- keyboard navigation (`h/l` or arrow keys)
-- theme switching (`t`)
-- ASCII portrait rendering
-- minimal shell-inspired design
-- ready to run over SSH
-
----
+- Responsive terminal UI with dark and light themes
+- Readable profile and selected link at 32 columns × 10 rows and above, with resize guidance below that size
+- Portrait on wide, tall terminals; text-first layout in compact windows
+- Scrollable links that keep the keyboard selection visible
+- Terminal mode and cursor restoration on exit, setup errors, and panics
 
 ## Controls
 
 | Key | Action |
-|----|----|
-| `h` / `←` | switch tabs |
-| `l` / `→` | switch tabs |
-| `t` | toggle theme |
-| `q` | quit |
+|-----|--------|
+| `h` / `←` | About tab |
+| `l` / `→` | Links tab |
+| `Tab` / `Shift+Tab` | Switch tabs |
+| `j` / `↓` | Select the next link |
+| `k` / `↑` | Select the previous link |
+| `t` | Toggle dark/light theme |
+| `q` / `Esc` / `Ctrl+C` | Quit |
 
----
+Links are displayed for reference; selecting a link does not open a browser.
+The resume is a placeholder until a URL is provided.
 
-## Run Locally
+## Run locally
+
+Install a stable Rust toolchain, then run in an interactive terminal:
 
 ```bash
 git clone https://github.com/neohe-imer/terminal-portfolio
 cd terminal-portfolio
-cargo run
-
-SSH Version (coming soon)
-
-The project is designed to run over SSH so visitors can open the portfolio directly in their terminal:
-
-
+cargo run --locked
 ```
+
+## Development
+
+```bash
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+```
+
+Tests cover keyboard input, selection visibility, both themes, and rendering at
+zero-sized, compact, standard, and large terminal dimensions.
+
+## SSH
+
+The application can run inside an existing interactive SSH session. A public SSH
+portfolio endpoint is not included; hosting one is still planned.
+
 ## License
 
-MIT
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).

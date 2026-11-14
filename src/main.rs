@@ -1,43 +1,24 @@
-use std::io::stdout;
+mod terminal;
 
 use color_eyre::Result;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{
-        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-    },
-};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
-    backend::CrosstermBackend,
+    backend::Backend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 
 fn main() -> Result<()> {
     color_eyre::install()?;
-    let mut terminal = setup_terminal()?;
-    let app_result = App::default().run(&mut terminal);
-    restore_terminal(&mut terminal)?;
-    app_result
-}
-
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<std::io::Stdout>>> {
-    enable_raw_mode()?;
-    let mut out = stdout();
-    execute!(out, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(out);
-    let terminal = Terminal::new(backend)?;
-    Ok(terminal)
-}
-
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    terminal::install_panic_hook();
+    let mut session = terminal::TerminalSession::new()?;
+    let app_result = App::default().run(&mut session.terminal);
+    let restore_result = session.restore();
+    app_result?;
+    restore_result?;
     Ok(())
 }
 
@@ -63,7 +44,7 @@ struct LinkItem {
 struct App {
     tab: Tab,
     theme: ThemeMode,
-    selected_link: usize,
+    link_state: ListState,
     running: bool,
     links: Vec<LinkItem>,
 }
@@ -73,7 +54,7 @@ impl Default for App {
         Self {
             tab: Tab::About,
             theme: ThemeMode::Dark,
-            selected_link: 0,
+            link_state: ListState::default().with_selected(Some(0)),
             running: true,
             links: vec![
                 LinkItem {
@@ -98,283 +79,288 @@ impl Default for App {
 }
 
 impl App {
-    fn run(
-        &mut self,
-        terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    ) -> Result<()> {
+    fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
-
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    self.handle_key(key.code);
-                }
+                self.handle_key(key);
             }
         }
         Ok(())
     }
 
-    fn handle_key(&mut self, key: KeyCode) {
-        match key {
+    fn handle_key(&mut self, key: KeyEvent) {
+        // Releases must not trigger actions; navigation may repeat while held.
+        if key.kind == KeyEventKind::Release {
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(key.code, KeyCode::Char('c' | 'C')) {
+                self.running = false;
+            }
+            return;
+        }
+        if key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            return;
+        }
+        match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.running = false,
-
-            KeyCode::Left | KeyCode::Char('h') => match self.tab {
-                Tab::About => {}
-                Tab::Links => self.tab = Tab::About,
-            },
-
-            KeyCode::Right | KeyCode::Char('l') => match self.tab {
-                Tab::About => self.tab = Tab::Links,
-                Tab::Links => {}
-            },
-
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.tab == Tab::Links && self.selected_link > 0 {
-                    self.selected_link -= 1;
-                }
+            KeyCode::Left | KeyCode::Char('h') => self.tab = Tab::About,
+            KeyCode::Right | KeyCode::Char('l') => self.tab = Tab::Links,
+            KeyCode::Tab | KeyCode::BackTab if key.kind == KeyEventKind::Press => {
+                self.tab = match self.tab {
+                    Tab::About => Tab::Links,
+                    Tab::Links => Tab::About,
+                };
             }
-
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.tab == Tab::Links && self.selected_link + 1 < self.links.len() {
-                    self.selected_link += 1;
-                }
-            }
-
-            KeyCode::Char('t') => {
+            KeyCode::Up | KeyCode::Char('k') if self.tab == Tab::Links => self.select_link(false),
+            KeyCode::Down | KeyCode::Char('j') if self.tab == Tab::Links => self.select_link(true),
+            KeyCode::Char('t') if key.kind == KeyEventKind::Press => {
                 self.theme = match self.theme {
                     ThemeMode::Dark => ThemeMode::Light,
                     ThemeMode::Light => ThemeMode::Dark,
-                }
+                };
             }
-
             _ => {}
         }
     }
 
-    fn render(&self, frame: &mut Frame) {
+    fn select_link(&mut self, next: bool) {
+        if self.links.is_empty() {
+            self.link_state.select(None);
+            return;
+        }
+        let selected = self
+            .link_state
+            .selected()
+            .unwrap_or(0)
+            .min(self.links.len() - 1);
+        self.link_state.select(Some(if next {
+            selected.saturating_add(1).min(self.links.len() - 1)
+        } else {
+            selected.saturating_sub(1)
+        }));
+    }
+
+    fn render(&mut self, frame: &mut Frame) {
         let palette = Palette::from(self.theme);
+        let screen = frame.size();
+        frame.render_widget(
+            Block::default().style(Style::default().bg(palette.bg).fg(palette.fg)),
+            screen,
+        );
+        if screen.width < 32 || screen.height < 10 {
+            frame.render_widget(
+                Paragraph::new("Resize to at least 32 × 10\nq / Esc / Ctrl+C to quit")
+                    .style(Style::default().fg(palette.accent))
+                    .wrap(Wrap { trim: true }),
+                screen,
+            );
+            return;
+        }
 
-        frame.render_widget(Clear, frame.size());
-        frame.render_widget(Block::default().style(Style::default().bg(palette.bg)), frame.size());
-
-        let outer = centered_rect(80, 78, frame.size());
-
+        // Fill small terminals; cap the panel on large displays without shrinking content.
+        let outer = window_area(screen);
         let window = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette.border))
-            .style(Style::default().bg(palette.panel_bg))
-            .title(Line::from(vec![
-                Span::styled(" ● ", Style::default().fg(Color::Red)),
-                Span::styled(" ● ", Style::default().fg(Color::Yellow)),
-                Span::styled(" ● ", Style::default().fg(Color::Green)),
-                Span::styled(" ssh hi.neo.dev ", Style::default().fg(palette.muted)),
-            ]));
-
+            .style(Style::default().bg(palette.panel_bg).fg(palette.fg))
+            .title(Line::styled(
+                " neo / terminal portfolio ",
+                Style::default().fg(palette.muted),
+            ));
+        let inner = window.inner(outer);
         frame.render_widget(window, outer);
-
-        let inner = Rect {
-            x: outer.x + 2,
-            y: outer.y + 1,
-            width: outer.width.saturating_sub(4),
-            height: outer.height.saturating_sub(2),
-        };
-
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
-                Constraint::Min(10),
+                Constraint::Length(2),
+                Constraint::Min(3),
                 Constraint::Length(2),
             ])
             .split(inner);
-
         self.render_header(frame, rows[0], palette);
-        self.render_body(frame, rows[1], palette);
+        match self.tab {
+            Tab::About => self.render_about(frame, rows[1], palette),
+            Tab::Links => self.render_links(frame, rows[1], palette),
+        }
         self.render_footer(frame, rows[2], palette);
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect, palette: Palette) {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(20),
-                Constraint::Min(10),
-                Constraint::Length(22),
-            ])
-            .split(area);
-
-        let about = if self.tab == Tab::About {
-            format!("[About]")
-        } else {
-            " About ".to_string()
-        };
-
-        let links = if self.tab == Tab::Links {
-            format!("[Links]")
-        } else {
-            " Links ".to_string()
-        };
-
-        let left = Paragraph::new(Line::from(vec![
+        let tabs = Line::from(vec![
             Span::styled(
-                about,
-                Style::default().fg(if self.tab == Tab::About {
-                    palette.accent
+                if self.tab == Tab::About {
+                    " [About] "
                 } else {
-                    palette.muted
-                }),
+                    "  About  "
+                },
+                Style::default()
+                    .fg(if self.tab == Tab::About {
+                        palette.accent
+                    } else {
+                        palette.muted
+                    })
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("  "),
             Span::styled(
-                links,
-                Style::default().fg(if self.tab == Tab::Links {
-                    palette.accent
+                if self.tab == Tab::Links {
+                    " [Links] "
                 } else {
-                    palette.muted
-                }),
+                    "  Links  "
+                },
+                Style::default()
+                    .fg(if self.tab == Tab::Links {
+                        palette.accent
+                    } else {
+                        palette.muted
+                    })
+                    .add_modifier(Modifier::BOLD),
             ),
-        ]));
-        frame.render_widget(left, chunks[0]);
-
-        let right = Paragraph::new(
-            Line::from(vec![
-                Span::styled("[", Style::default().fg(palette.accent)),
-                Span::styled(" terminal portfolio ", Style::default().fg(palette.accent)),
-                Span::styled("]", Style::default().fg(palette.accent)),
-            ])
-        )
-        .alignment(Alignment::Right);
-        frame.render_widget(right, chunks[2]);
-    }
-
-    fn render_body(&self, frame: &mut Frame, area: Rect, palette: Palette) {
-        match self.tab {
-            Tab::About => self.render_about(frame, area, palette),
-            Tab::Links => self.render_links(frame, area, palette),
+        ]);
+        frame.render_widget(Paragraph::new(tabs), area);
+        if area.width >= 48 {
+            let theme = match self.theme {
+                ThemeMode::Dark => "dark",
+                ThemeMode::Light => "light",
+            };
+            frame.render_widget(
+                Paragraph::new(format!("{theme} / v{} ", env!("CARGO_PKG_VERSION")))
+                    .style(Style::default().fg(palette.muted))
+                    .alignment(Alignment::Right),
+                Rect {
+                    x: area.x + 20,
+                    width: area.width - 20,
+                    ..area
+                },
+            );
         }
     }
 
     fn render_about(&self, frame: &mut Frame, area: Rect, palette: Palette) {
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(38),
-                Constraint::Percentage(62),
-            ])
-            .split(area);
-
-        let portrait = Paragraph::new(portrait_text())
-            .style(Style::default().fg(palette.fg))
-            .alignment(Alignment::Center);
-
-        let portrait_box = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(20),
-                Constraint::Percentage(60),
-                Constraint::Percentage(20),
-            ])
-            .split(horizontal[0]);
-
-        frame.render_widget(portrait, portrait_box[1]);
-
-        let bio = Text::from(vec![
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Brayan Ruiz", Style::default().fg(palette.fg).add_modifier(Modifier::BOLD)),
-                Span::styled(" hola.", Style::default().fg(palette.fg)),
-            ]),
-            Line::from(""),
+        let text_area = if area.width >= 76 && area.height >= 14 {
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(30), Constraint::Min(1)])
+                .split(area);
+            frame.render_widget(
+                Paragraph::new(portrait_text())
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(palette.accent)),
+                columns[0],
+            );
+            columns[1]
+        } else {
+            area
+        };
+        let mut bio = vec![
             Line::from(vec![
                 Span::styled(
-                    "This demo is a Ratatui-powered personal terminal page inspired by shell aesthetics.",
-                    Style::default().fg(palette.fg),
+                    "Brayan Ruiz",
+                    Style::default().fg(palette.fg).add_modifier(Modifier::BOLD),
                 ),
+                Span::styled("  hola.", Style::default().fg(palette.accent)),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "Use ",
+            Line::from("A personal terminal page built with Rust and Ratatui."),
+        ];
+        // Keep the identity and description visible even in a 32 × 10 terminal.
+        if text_area.height >= 10 {
+            bio.extend([
+                Line::from(""),
+                Line::styled(
+                    "Explore the Links tab to find me online.",
                     Style::default().fg(palette.muted),
                 ),
-                Span::styled("h/l", Style::default().fg(palette.accent)),
-                Span::styled(" or arrow keys to switch tabs, ", Style::default().fg(palette.muted)),
-                Span::styled("t", Style::default().fg(palette.accent)),
-                Span::styled(" to toggle theme, and ", Style::default().fg(palette.muted)),
-                Span::styled("q", Style::default().fg(palette.accent)),
-                Span::styled(" to quit.", Style::default().fg(palette.muted)),
-            ]),
-        ]);
-
-        let text = Paragraph::new(bio).wrap(ratatui::widgets::Wrap { trim: true });
-        let text_box = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(24),
-                Constraint::Percentage(52),
-                Constraint::Percentage(24),
-            ])
-            .split(horizontal[1]);
-
-        frame.render_widget(text, text_box[1]);
+                Line::from(""),
+                Line::styled(
+                    "Use Tab or ←/→ to explore. Press t to change the theme.",
+                    Style::default().fg(palette.muted),
+                ),
+            ]);
+        }
+        frame.render_widget(Paragraph::new(bio).wrap(Wrap { trim: true }), text_area);
     }
 
-    fn render_links(&self, frame: &mut Frame, area: Rect, palette: Palette) {
+    fn render_links(&mut self, frame: &mut Frame, area: Rect, palette: Palette) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2),
-                Constraint::Min(10),
-            ])
+            .constraints([Constraint::Length(1), Constraint::Min(2)])
             .split(area);
-
-        let intro = Paragraph::new("Selected links")
-            .style(Style::default().fg(palette.accent));
-        frame.render_widget(intro, rows[0]);
-
-        let mut lines = Vec::new();
-
-        for (idx, link) in self.links.iter().enumerate() {
-            let selected = idx == self.selected_link;
-            let prefix = if selected { "› " } else { "  " };
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    prefix,
-                    Style::default().fg(if selected { palette.accent } else { palette.muted }),
-                ),
-                Span::styled(
-                    format!("{:<12}", link.label),
-                    Style::default().fg(if selected { palette.fg } else { palette.muted }),
-                ),
-                Span::raw(" "),
-                Span::styled(
-                    link.value,
-                    Style::default().fg(if selected { palette.accent } else { palette.fg }),
-                ),
-            ]));
-            lines.push(Line::from(""));
+        if self.links.is_empty() {
+            self.link_state.select(None);
+            frame.render_widget(
+                Paragraph::new("No links available.").style(Style::default().fg(palette.muted)),
+                area,
+            );
+            return;
         }
-
-        let list = Paragraph::new(Text::from(lines)).wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(list, rows[1]);
+        let selected = self
+            .link_state
+            .selected()
+            .unwrap_or(0)
+            .min(self.links.len() - 1);
+        self.link_state.select(Some(selected));
+        frame.render_widget(
+            Paragraph::new(format!(" Links · {}/{}", selected + 1, self.links.len()))
+                .style(Style::default().fg(palette.muted)),
+            rows[0],
+        );
+        let items: Vec<_> = self
+            .links
+            .iter()
+            .map(|link| {
+                let lines = if rows[1].width >= 54 {
+                    vec![
+                        Line::from(format!("{:<12} {}", link.label, link.value)),
+                        Line::from(""),
+                    ]
+                } else {
+                    vec![Line::from(link.label), Line::from(link.value)]
+                };
+                ListItem::new(lines)
+            })
+            .collect();
+        let list = List::new(items)
+            .style(Style::default().fg(palette.fg))
+            .highlight_style(
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("› ");
+        frame.render_stateful_widget(list, rows[1], &mut self.link_state);
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect, palette: Palette) {
-        let footer = Line::from(vec![
-            Span::styled("v.0.1", Style::default().fg(palette.muted)),
-            Span::raw("   "),
-            Span::styled("←→", Style::default().fg(palette.accent)),
-            Span::styled(" navigate ", Style::default().fg(palette.muted)),
-            Span::styled("t", Style::default().fg(palette.accent)),
-            Span::styled(" theme ", Style::default().fg(palette.muted)),
-            Span::styled("q", Style::default().fg(palette.accent)),
-            Span::styled(" quit", Style::default().fg(palette.muted)),
-        ]);
-
-        let paragraph = Paragraph::new(footer).alignment(Alignment::Center);
-        frame.render_widget(paragraph, area);
+        let navigation = match self.tab {
+            Tab::About => "Tab / ←→ switch tabs",
+            Tab::Links => "↑↓ / j k select · ←→ tabs",
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(navigation),
+                Line::from("t theme · q / Esc quit"),
+            ])
+            .style(Style::default().fg(palette.muted))
+            .alignment(Alignment::Center),
+            area,
+        );
     }
+}
+
+fn window_area(area: Rect) -> Rect {
+    let width = area.width.min(100);
+    let height = area.height.min(30);
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -403,31 +389,11 @@ impl From<ThemeMode> for Palette {
                 panel_bg: Color::Rgb(248, 245, 238),
                 fg: Color::Rgb(28, 28, 28),
                 muted: Color::Rgb(110, 110, 110),
-                accent: Color::Rgb(210, 95, 10),
+                accent: Color::Rgb(160, 65, 8),
                 border: Color::Rgb(175, 170, 160),
             },
         }
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
 }
 
 fn portrait_text() -> &'static str {
@@ -445,3 +411,6 @@ fn portrait_text() -> &'static str {
 ⠀⠀⠀⠀⠀⠀⠀⠉⠛⠛⠛⠉
 "#
 }
+
+#[cfg(test)]
+mod tests;
