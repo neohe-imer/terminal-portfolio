@@ -32,11 +32,11 @@ fn navigation_preserves_selection_and_stays_in_bounds() {
     for _ in 0..10 {
         press(&mut app, KeyCode::Char('j'));
     }
-    assert_eq!(app.link_state.selected(), Some(3));
+    assert_eq!(app.link_state.selected(), Some(app.links.len() - 1));
     press(&mut app, KeyCode::BackTab);
     assert_eq!(app.tab, Tab::About);
     press(&mut app, KeyCode::Right);
-    assert_eq!(app.link_state.selected(), Some(3));
+    assert_eq!(app.link_state.selected(), Some(app.links.len() - 1));
     for _ in 0..10 {
         press(&mut app, KeyCode::Up);
     }
@@ -129,14 +129,36 @@ fn selected_link_remains_visible_in_both_directions_and_after_resize() {
             theme,
             ..App::default()
         };
-        for (width, height) in [(80, 24), (32, 10), (40, 12), (120, 40), (32, 10)] {
+        for (width, height) in [
+            (80, 24),
+            (32, 10),
+            (40, 12),
+            (56, 10),
+            (64, 10),
+            (66, 10),
+            (120, 40),
+            (32, 10),
+        ] {
             for index in (0..app.links.len()).chain((0..app.links.len()).rev()) {
                 app.link_state.select(Some(index));
                 let buffer = draw(&mut app, width, height);
                 let screen = text(&buffer);
                 assert!(screen.contains(app.links[index].label), "{screen}");
-                assert!(screen.contains(app.links[index].value), "{screen}");
-                assert!(screen.contains(&format!("{}/4", index + 1)), "{screen}");
+                let unwrapped: String = screen
+                    .lines()
+                    .map(|line| {
+                        line.trim()
+                            .trim_matches('│')
+                            .trim()
+                            .trim_start_matches('›')
+                            .trim()
+                    })
+                    .collect();
+                assert!(unwrapped.contains(app.links[index].value), "{screen}");
+                assert!(
+                    screen.contains(&format!("{}/{}", index + 1, app.links.len())),
+                    "{screen}"
+                );
                 assert!(screen.contains("↑↓ / j k select"), "{screen}");
                 let marker = buffer
                     .content
@@ -158,7 +180,7 @@ fn empty_and_stale_selection_are_safe() {
     };
     app.link_state.select(Some(usize::MAX));
     assert!(text(&draw(&mut app, 32, 10)).contains("coming soon"));
-    assert_eq!(app.link_state.selected(), Some(3));
+    assert_eq!(app.link_state.selected(), Some(app.links.len() - 1));
     app.links.clear();
     press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Up);
