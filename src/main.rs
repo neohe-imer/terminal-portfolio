@@ -62,6 +62,10 @@ impl Default for App {
                     value: "github.com/neohe-imer",
                 },
                 LinkItem {
+                    label: "LinkedIn",
+                    value: "https://www.linkedin.com/in/brayan-ruiz-ramos/",
+                },
+                LinkItem {
                     label: "X / Twitter",
                     value: "x.com/brayanruizr",
                 },
@@ -313,13 +317,15 @@ impl App {
             .links
             .iter()
             .map(|link| {
-                let lines = if rows[1].width >= 54 {
-                    vec![
-                        Line::from(format!("{:<12} {}", link.label, link.value)),
-                        Line::from(""),
-                    ]
+                // Reserve two columns for the selection marker.
+                let width = rows[1].width.saturating_sub(2);
+                let inline = Line::from(format!("{:<12} {}", link.label, link.value));
+                let lines = if rows[1].width >= 54 && inline.width() <= usize::from(width) {
+                    vec![inline, Line::from("")]
                 } else {
-                    vec![Line::from(link.label), Line::from(link.value)]
+                    let mut lines = vec![Line::from(link.label)];
+                    lines.extend(wrap_link_value(link.value, width));
+                    lines
                 };
                 ListItem::new(lines)
             })
@@ -350,6 +356,24 @@ impl App {
             area,
         );
     }
+}
+
+/// Wrap long destinations without truncating the URL or splitting a grapheme.
+fn wrap_link_value(value: &str, width: u16) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0;
+    for grapheme in Line::from(value).styled_graphemes(Style::default()) {
+        let grapheme_width = Span::raw(grapheme.symbol).width();
+        if current_width + grapheme_width > usize::from(width) && !current.is_empty() {
+            lines.push(Line::from(std::mem::take(&mut current)));
+            current_width = 0;
+        }
+        current.push_str(grapheme.symbol);
+        current_width += grapheme_width;
+    }
+    lines.push(Line::from(current));
+    lines
 }
 
 fn window_area(area: Rect) -> Rect {
